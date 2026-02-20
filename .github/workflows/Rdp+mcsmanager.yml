@@ -1,67 +1,33 @@
-name: RDP + MCSManager Panel
+name: RDP MCS
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp-mcs:
+  build:
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
       - name: Enable RDP
         run: |
-          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
-          netsh advfirewall firewall add rule name="RDP" dir=in action=allow protocol=TCP localport=3389
+          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Restart-Service TermService -Force
 
       - name: Create RDP User
         run: |
           $password = -join ((33..126) | Get-Random -Count 20 | % {[char]$_})
           $secure = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser Skyro -Password $secure -AccountNeverExpires
+          New-LocalUser Skyro -Password $secure
           Add-LocalGroupMember Administrators Skyro
           Add-LocalGroupMember "Remote Desktop Users" Skyro
-          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password"
 
-      - name: Install Java 21 (Temurin)
-  run: |
-    curl -L -o java21.msi https://github.com/adoptium/temurin21-binaries/releases/latest/download/OpenJDK21U-jdk_x64_windows_hotspot.msi
-    start /wait msiexec /i java21.msi /quiet /norestart
-
-      - name: Install MCSManager
+      - name: Install Java 21
         run: |
-          mkdir C:\MCSManager
-          Invoke-WebRequest https://github.com/MCSManager/MCSManager/releases/latest/download/mcsmanager_windows_amd64.zip -OutFile mcs.zip
-          Expand-Archive mcs.zip C:\MCSManager
+          curl -L -o java21.msi https://github.com/adoptium/temurin21-binaries/releases/latest/download/OpenJDK21U-jdk_x64_windows_hotspot.msi
+          start /wait msiexec /i java21.msi /quiet /norestart
 
-      - name: Start MCSManager
-        run: |
-          cd C:\MCSManager
-          Start-Process .\mcsmanager.exe
-
-      - name: Install Tailscale
-        run: |
-          Invoke-WebRequest https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi -OutFile ts.msi
-          Start-Process msiexec.exe -ArgumentList "/i ts.msi /quiet /norestart" -Wait
-
-      - name: Connect Tailscale
-        run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }}
-          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-          echo "TS_IP=$ip" >> $env:GITHUB_ENV
-
-      - name: Open Ports for Web Panel
-        run: |
-          netsh advfirewall firewall add rule name="MCSManager-Web" dir=in action=allow protocol=TCP localport=23333
-
-      - name: Info
-        run: |
-          Write-Host "RDP IP     : $env:TS_IP"
-          Write-Host "RDP User   : Skyro"
-          Write-Host "RDP Pass   : $env:RDP_PASS"
-          Write-Host "Panel URL  : http://$env:TS_IP:23333"
-
-      - name: Keep Alive
-        run: |
-          while ($true) { Start-Sleep 300 }
+      - name: Check Java
+        run: java -version
