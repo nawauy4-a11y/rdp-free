@@ -25,9 +25,9 @@ jobs:
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
       - name: Install Java 21 (Temurin)
-        run: |
-          Invoke-WebRequest https://github.com/adoptium/temurin21-binaries/releases/latest/download/OpenJDK21U-jdk_x64_windows_hotspot.msi -OutFile java21.msi
-          Start-Process msiexec.exe -ArgumentList "/i java21.msi /quiet /norestart" -Wait
+  run: |
+    curl -L -o java21.msi https://github.com/adoptium/temurin21-binaries/releases/latest/download/OpenJDK21U-jdk_x64_windows_hotspot.msi
+    start /wait msiexec /i java21.msi /quiet /norestart
 
       - name: Install MCSManager
         run: |
