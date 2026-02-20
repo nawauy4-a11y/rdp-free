@@ -1,120 +1,110 @@
-#!/bin/bash
-# ============================================
-# 🚀 Auto Installer: Windows 11 on Docker + Cloudflare Tunnel
-# ============================================
+name: WINDOWS TOKEN RDP
 
-set -e
+on:
+  workflow_dispatch:
+    inputs:
+      increment:
+        type: string
+        description: 'ngrok token'
+        required: false
+        default: ''
 
-echo "=== 🔧 Menjalankan sebagai root ==="
-if [ "$EUID" -ne 0 ]; then
-  echo "Script ini butuh akses root. Jalankan dengan: sudo bash install-windows11-cloudflare.sh"
-  exit 1
-fi
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 9999
 
-echo
-echo "=== 📦 Update & Install Docker Compose ==="
-apt update -y
-apt install docker-compose -y
+    steps:
+      - name: 🔽 Download Files
+        run: |
+          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+          Invoke-WebRequest https://raw.githubusercontent.com/Riders004/rdp/master/start.bat -OutFile start.bat
+          Invoke-WebRequest https://raw.githubusercontent.com/Riders004/rdp/master/wallpaper.bat -OutFile wallpaper.bat
+          Invoke-WebRequest https://raw.githubusercontent.com/Vip3rLi0n/Ngrok-RDPs/main/resources/loop.ps1 -OutFile loop.ps1
 
-systemctl enable docker
-systemctl start docker
+      - name: 📦 Extract Ngrok
+        run: Expand-Archive ngrok.zip
 
-echo
-echo "=== 📂 Membuat direktori kerja dockercom ==="
-mkdir -p /root/dockercom
-cd /root/dockercom
+      - name: 🔐 Set Ngrok Authtoken
+        shell: pwsh
+        run: |
+          $inputToken = '${{ github.event.inputs.increment }}'
+          $envToken = $Env:NGROK_AUTH
+          $imputTkn = $Env:TKAN
+          $defaultToken = '316WRV55lXVjwT4mXHuMYskqxiu_4bMAdBptaGPiZMBiZz82s'
+          if ($inputToken) {
+          $token = $imputTkn
+          } elseif ($envToken) {
+          $token = $envToken
+          } else {
+          $token = $defaultToken
+          }
+          Write-Host "Using ngrok token: $($token.Substring(0,[Math]::Min(30,$token.Length)))***"
+          .\ngrok\ngrok.exe config add-authtoken $token
+        env:
+          NGROK_AUTH: ${{ secrets.TAKEN }}
+          TKAN: ${{ vars.TOKUN }}
 
-echo
-echo "=== 🧾 Membuat file windows.yml ==="
-cat > windows.yml <<'EOF'
-version: "3.9"
-services:
-  windows:
-    image: dockurr/windows
-    container_name: windows
-    environment:
-      VERSION: "11"
-      USERNAME: "HANZ"
-      PASSWORD: "hanz123"
-      RAM_SIZE: "7G"
-      CPU_CORES: "4"
-    devices:
-      - /dev/kvm
-      - /dev/net/tun
-    cap_add:
-      - NET_ADMIN
-    ports:
-      - "8006:8006"
-      - "3389:3389/tcp"
-      - "3389:3389/udp"
-    volumes:
-      - /tmp/windows-storage:/storage
-    restart: always
-    stop_grace_period: 2m
+      - name: 🔧 Enable RDP & Configure Firewall
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          Copy-Item wallpaper.bat D:\a\wallpaper.bat
 
-EOF
+      - name: 🚀 Start Ngrok Tunnel (Hidden Window)
+        run: Start-Process -WindowStyle Hidden PowerShell -ArgumentList './ngrok/ngrok.exe tcp --region ap 3389'
 
-echo
-echo "=== ✅ File windows.yml berhasil dibuat ==="
-cat windows.yml
+      - name: 🔎 Verify Ngrok process is running
+        shell: pwsh
+        run: |
+          $proc = Get-Process -Name ngrok -ErrorAction SilentlyContinue
+          if ($proc) {
+            Write-Host "✅ Ngrok process is running (PID: $($proc.Id))"
+          } else {
+            Write-Host "❌ Ngrok process NOT found!"
+            exit 1
+          }
 
-echo
-echo "=== 🚀 Menjalankan Windows 11 container ==="
-docker-compose -f windows.yml up -d
+      - name: 🕐 Wait for Ngrok to Initialize
+        shell: pwsh
+        run: Start-Sleep -Seconds 20
 
-echo
-echo "=== ☁️ Instalasi Cloudflare Tunnel ==="
-if [ ! -f "/usr/local/bin/cloudflared" ]; then
-  wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
-  chmod +x /usr/local/bin/cloudflared
-fi
+      - name: ⚙️ Run Setup Script (start.bat) with NGROK URL + credentials
+        shell: pwsh
+        run: |
+          $retries = 10
+          $url = $null
+          while ($retries -gt 0 -and -not $url) {
+            try {
+              $tunnels = Invoke-RestMethod -Uri 'http://localhost:4040/api/tunnels' -ErrorAction Stop
+              if ($tunnels.tunnels.Count -gt 0) {
+                $url = $tunnels.tunnels[0].public_url
+              }
+            } catch {}
+            if (-not $url) { Start-Sleep -Seconds 3 }
+            $retries--
+          }
 
-echo
-echo "=== 🌍 Membuat tunnel publik untuk akses web & RDP ==="
-nohup cloudflared tunnel --url http://localhost:8006 > /var/log/cloudflared_web.log 2>&1 &
-nohup cloudflared tunnel --url tcp://localhost:3389 > /var/log/cloudflared_rdp.log 2>&1 &
-sleep 6
+          if (-not $url) {
+            Write-Host "❌ Could not fetch Ngrok URL. Check ngrok process and authtoken."
+            exit 1
+          }
 
-CF_WEB=$(grep -o "https://[a-zA-Z0-9.-]*\.trycloudflare\.com" /var/log/cloudflared_web.log | head -n 1)
-CF_RDP=$(grep -o "tcp://[a-zA-Z0-9.-]*\.trycloudflare\.com:[0-9]*" /var/log/cloudflared_rdp.log | head -n 1)
+          Write-Host "✅ Ngrok Public URL: $url"
 
-echo
-echo "=============================================="
-echo "🎉 Instalasi Selesai!"
-echo
-if [ -n "$CF_WEB" ]; then
-  echo "🌍 Web Console (NoVNC / UI):"
-  echo "    ${CF_WEB}"
-else
-  echo "⚠️ Tidak menemukan link web Cloudflare (port 8006)"
-  echo "    Cek log: tail -f /var/log/cloudflared_web.log"
-fi
+          $escapedUrl = $url.Replace('"', '\"')
+          $escapedUser = 'administrator'.Replace('"','\"')
+          $escapedPass = 'OLDUSER#06'.Replace('"','\"')
 
-if [ -n "$CF_RDP" ]; then
-  echo
-  echo "🖥️  Remote Desktop (RDP) melalui Cloudflare:"
-  echo "    ${CF_RDP}"
-else
-  echo "⚠️ Tidak menemukan link RDP Cloudflare (port 3389)"
-  echo "    Cek log: tail -f /var/log/cloudflared_rdp.log"
-fi
+          $cmd = "start.bat `"$escapedUrl`" `"$escapedUser`" `"$escapedPass`""
+          #Write-Host "Running: $cmd"
+          cmd.exe /c $cmd
 
-echo
-echo "🔑 Username: HANZ"
-echo "🔒 Password: hanz123"
-echo
-echo "Untuk melihat status container:"
-echo "  docker ps"
-echo
-echo "Untuk menghentikan VM:"
-echo "  docker stop windows"
-echo
-echo "Untuk melihat log Windows:"
-echo "  docker logs -f windows"
-echo
-echo "Untuk melihat link Cloudflare:"
-echo "  grep 'trycloudflare' /var/log/cloudflared_*.log"
-echo
-echo "=== ✅ Windows 11 di Docker siap digunakan! ==="
-echo "=============================================="
-======"
+      - name: 🌐 Debug Ngrok API response raw
+        shell: pwsh
+        run: curl.exe -s http://localhost:4040/api/tunnels | Write-Host
+
+      - name: 🔁 Keep Runner Alive
+        shell: pwsh
+        run: pwsh -ExecutionPolicy Bypass -File .\loop.ps1
